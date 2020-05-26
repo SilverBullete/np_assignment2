@@ -23,25 +23,32 @@
 #include "protocol.h"
 
 using namespace std;
+
+// 创建互斥锁
 std::mutex mtx;
 /* Needs to be global, to be rechable by callback and main */
-int loopCount = 0;
-int id = 486;
-int flag = 0;
-map<int, int> session;
+int loopCount = 0;     // 记录有多久没有收到客户端的报文了
+int id = 486;          // sessoin id
+int flag = 0;          // 是否在处理客户端报文flag
+map<int, int> session; // 记录对各个session id客户端的等待时间
 
 /* Call back function, will be called when the SIGALRM is raised when the timer expires. */
-void checkJobbList(int signum)
+void checkJobList(int signum)
 {
-  // As anybody can call the handler, its good coding to check the signal number that called it.
+  // 当前没有报文正在处理，记录时间
   if (flag == 0)
   {
     loopCount++;
   }
+
+  //修改session，上互斥锁
   mtx.lock();
+  //遍历session
   for (auto it = session.begin(); it != session.end();)
   {
+    // 等待时间 ++
     it->second++;
+    // 判断这个客户端是否超时, 超时则从session中删除
     if (it->second >= 10)
     {
       it = session.erase(it);
@@ -50,7 +57,10 @@ void checkJobbList(int signum)
     else
       ++it;
   }
+  // 释放互斥锁
   mtx.unlock();
+
+  // 10s没收到报文了，抱怨一下 (一个服务器的时候我孤独啊)
   if (loopCount >= 10)
   {
     printf("Wait for client`s message.\n");
@@ -67,43 +77,52 @@ int main(int argc, char *argv[])
   /* 
      Prepare to setup a reoccurring event every 10s. If it_interval, or it_value is omitted, it will be a single alarm 10s after it has been set. 
   */
+  // 初始化定时器，每1s给signal发送一个信号，执行checkJobList函数
   struct itimerval alarmTime;
   alarmTime.it_interval.tv_sec = 1;
-  alarmTime.it_interval.tv_usec = 1;
+  alarmTime.it_interval.tv_usec = 0;
   alarmTime.it_value.tv_sec = 1;
-  alarmTime.it_value.tv_usec = 1;
+  alarmTime.it_value.tv_usec = 0;
 
   /* Regiter a callback function, associated with the SIGALRM signal, which will be raised when the alarm goes of */
-  signal(SIGALRM, checkJobbList);
+  signal(SIGALRM, checkJobList);
   setitimer(ITIMER_REAL, &alarmTime, NULL); // Start/register the alarm.
+
+  // 初始化参数
   int sockfd;
   struct sockaddr_in server;
   struct sockaddr_in client;
   socklen_t addrlen;
   int num;
+  calcMessage message;
+  calcProtocol protocol;
+  calcProtocol protocolRes;
+  char *ptr;
+  int session_id;
+  char buf[MAXDATASIZE];
+  addrlen = sizeof(client);
+
+  // 创建socket
   if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1)
   {
     perror("Creatingsocket failed.\n");
     exit(1);
   }
 
+  // 初始化服务器信息
   bzero(&server, sizeof(server));
   server.sin_family = AF_INET;
   server.sin_port = htons(PORT);
   server.sin_addr.s_addr = htonl(INADDR_ANY);
+
+  // 服务器绑定本地地址/端口
   if (bind(sockfd, (struct sockaddr *)&server, sizeof(server)) == -1)
   {
     perror("Bind()error.\n");
     exit(1);
   }
-  char buf[MAXDATASIZE];
-  calcMessage message;
-  calcProtocol protocol;
-  calcProtocol protocolRes;
-  addrlen = sizeof(client);
-  char *ptr;
-  int session_id;
 
+  // 一直等待接收来自客户端的请求
   while (num = recvfrom(sockfd, buf, MAXDATASIZE, 0, (struct sockaddr *)&client, &addrlen))
   {
     if (num < 0)
@@ -113,17 +132,21 @@ int main(int argc, char *argv[])
     }
     else
     {
+      // 开始营业
       flag = 1;
       printf("Get a message form client\n");
+      // 取报文头部，判断报文类别（version为自定义参数，详情见protocol.h）
       uint16_t version;
       memcpy(&version, buf, sizeof(version));
       version = ntohs(version);
       if (version == 2 && num == sizeof(calcMessage))
       {
         printf("The message type is calcMessage\n");
+        // copy报文内容到message对象
         memcpy(&message, buf, num);
         if (ntohs(message.type) == 22 && ntohl(message.message) == 0)
         {
+          // 创建一个session id
           session_id = id;
         }
         else
@@ -133,7 +156,9 @@ int main(int argc, char *argv[])
           loopCount = 0;
         }
         printf("Generate an id %d\n", id);
+        // 将session id 放入session
         session.insert(make_pair(session_id, 0));
+        // 初始化那个随机生成数组的类, 开始初始化protocol对象
         initCalcLib();
         loopCount = 0;
         ptr = randomType();
@@ -164,7 +189,9 @@ int main(int argc, char *argv[])
         printf("The message type is calcProtocol\n");
         memcpy(&protocolRes, buf, num);
         printf("Get a protocal result\n");
+        // 读取来自客户端的session id
         session_id = htonl(protocolRes.id);
+        // 判断这个客户端是否连接超时，超时就不理他了
         if (session.count(session_id) == 0)
         {
           printf("The task has been abandoned\n");
@@ -172,6 +199,7 @@ int main(int argc, char *argv[])
           loopCount = 0;
           continue;
         }
+        // 收到信息 耐心恢复至0
         session[session_id] = 0;
         switch (ntohl(protocol.arith))
         {
@@ -200,6 +228,7 @@ int main(int argc, char *argv[])
           protocol.flResult = htonl(ntohl(protocol.flValue1) / ntohl(protocol.flValue2));
           break;
         }
+        // 开始计算客户端算的对不对
         printf("Start checking");
         if ((ntohl(protocolRes.arith) <= 4 && ntohl(protocolRes.inResult) == ntohl(protocol.inResult)) ||
             (ntohl(protocolRes.arith) > 4 && ntohl(protocolRes.flResult) == ntohl(protocol.flResult)))
@@ -222,13 +251,16 @@ int main(int argc, char *argv[])
           sendto(sockfd, (char *)&message, sizeof(calcMessage), 0, (struct sockaddr *)&client, addrlen);
           printf("Task fail\n");
         }
+        // 处理完毕，将客户端session id从session中抹去 上互斥锁
         mtx.lock();
-        session.erase(id - 1);
+        session.erase(session_id);
+        // 释放互斥锁
         mtx.unlock();
         printf("One task finished :)\n\n");
         flag = 0;
         loopCount = 0;
       }
+      // 这不是我想要的报文
       else
       {
         message.type = htons(2);

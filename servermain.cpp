@@ -11,6 +11,10 @@
 #include <exception>
 #include <map>
 #include <mutex>
+#include <calcLib.h>
+#include "protocol.h"
+
+using namespace std;
 
 #define PORT 1234
 #define MAXDATASIZE 100
@@ -18,11 +22,6 @@
 /* You will to add includes here */
 
 // Included to get the support library
-#include <calcLib.h>
-
-#include "protocol.h"
-
-using namespace std;
 
 // 创建互斥锁
 std::mutex mtx;
@@ -71,12 +70,6 @@ void checkJobList(int signum)
 
 int main(int argc, char *argv[])
 {
-
-  /* Do more magic */
-
-  /* 
-     Prepare to setup a reoccurring event every 10s. If it_interval, or it_value is omitted, it will be a single alarm 10s after it has been set. 
-  */
   // 初始化定时器，每1s给signal发送一个信号，执行checkJobList函数
   struct itimerval alarmTime;
   alarmTime.it_interval.tv_sec = 1;
@@ -228,7 +221,7 @@ int main(int argc, char *argv[])
           protocol.flResult = htonl(ntohl(protocol.flValue1) / ntohl(protocol.flValue2));
           break;
         }
-        // 开始计算客户端算的对不对
+        // 开始计算客户端算的对不对，并发送判断结果到客户端
         printf("Start checking");
         if ((ntohl(protocolRes.arith) <= 4 && ntohl(protocolRes.inResult) == ntohl(protocol.inResult)) ||
             (ntohl(protocolRes.arith) > 4 && ntohl(protocolRes.flResult) == ntohl(protocol.flResult)))
@@ -268,6 +261,7 @@ int main(int argc, char *argv[])
         message.major_version = htons(1);
         message.minor_version = htons(0);
         message.protocol = htons(17);
+        // 发送错误信息message到客户端
         sendto(sockfd, (char *)&message, sizeof(calcMessage), 0, (struct sockaddr *)&client, addrlen);
         printf("Error response type :(\n");
         flag = 0;

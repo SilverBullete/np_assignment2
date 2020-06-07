@@ -153,9 +153,11 @@ int main(int argc, char *argv[])
       }
       sleep(sleepTime);
       printf("Send back a protocol to server\n");
+      // 发送计算结果报文给服务器
       sendto(sockfd, (char *)&protocol, sizeof(calcProtocol), 0, (struct sockaddr *)&server, sizeof(server));
       printf("Wait for server response\n");
       count = 0;
+      // 没有收到客户端消息则重传3次
       while (count < 3)
       {
         num = recvfrom(sockfd, buf, MAXDATASIZE, 0, (struct sockaddr *)&peer, &addrlen);
@@ -177,11 +179,14 @@ int main(int argc, char *argv[])
       }
       count = 0;
       uint16_t version;
+      // 从报文中取出version
       memcpy(&version, buf, sizeof(version));
       version = ntohs(version);
       printf("Get server response\n");
+      // 判断报文是否符合接收要求
       if (version == 2 && num == sizeof(calcMessage))
       {
+        // 将报文信息拷贝到message
         memcpy(&message, buf, num);
         if (ntohl(message.message) == 1)
         {
